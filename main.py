@@ -1,140 +1,156 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import requests
+from requests.auth import HTTPBasicAuth
+from datetime import date, timedelta
 
-st.set_page_config(layout="wide")
-st.title("📈 JCFAP usage report")
+# === Streamlit page ===
+st.set_page_config(page_title="📊 Jira Sprint Effort Dashboard", layout="wide")
+st.title("📊 Jira Sprint Effort Breakdown")
 
-# Upload section
-uploaded_file = st.file_uploader("📤 Upload your login CSV file", type=["csv"])
+# === Inputs ===
+st.sidebar.header("🔑 Jira API Config")
+JIRA_URL = st.sidebar.text_input("Jira URL", "https://kpisoft.atlassian.net/")
+EMAIL = st.sidebar.text_input("Email", "swaraj.s@entomo.co")
+API_TOKEN = st.sidebar.text_input("API Token", type="password")
 
-if uploaded_file:
-    try:
-        # Read CSV
-        df = pd.read_csv(uploaded_file)
+today = date.today()
+one_month_ago = today - timedelta(days=30)
 
-        # Parse timestamp
-        df["@timestamp"] = pd.to_datetime(
-            df["@timestamp"].str.replace("@", "", regex=False).str.strip(),
-            format="%b %d, %Y %H:%M:%S.%f"
-        )
+st.sidebar.header("📅 Sprint & Date Ranges")
+SPRINT_ID = st.sidebar.text_input("Sprint ID", "722")
 
-        # Add useful datetime columns
-        df["date"] = df["@timestamp"].dt.date
-        df["month"] = df["@timestamp"].dt.month_name()
+bugfix_start = st.sidebar.date_input("Bug Fixing Start Date", one_month_ago)
+bugfix_end = st.sidebar.date_input("Bug Fixing End Date", today)
+regression_start = st.sidebar.date_input("Regression Start Date", one_month_ago)
+regression_end = st.sidebar.date_input("Regression End Date", today)
+dev_start = st.sidebar.date_input("DEV Start Date", one_month_ago)
+dev_end = st.sidebar.date_input("DEV End Date", today)
+ps_start = st.sidebar.date_input("PS Start Date", one_month_ago)
+ps_end = st.sidebar.date_input("PS End Date", today)
 
-        # Month filter dropdown
-        months = df["month"].unique().tolist()
-        selected_month = st.selectbox("📅 Select Month", options=["All"] + sorted(months, key=lambda m: datetime.strptime(m, "%B").month))
+if st.sidebar.button("🚀 Run Effort Breakdown"):
 
-        if selected_month != "All":
-            df_filtered = df[df["month"] == selected_month]
+    resource_static = [
+        {"Name": "Abhishek Patro", "Target SP": None, "Senior Dev": "No"},
+        {"Name": "Amit Krishna", "Target SP": 20, "Senior Dev": "Yes"},
+        {"Name": "Avinash S", "Target SP": 20, "Senior Dev": "Yes"},
+        {"Name": "Chaithra B", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "chandan k", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "Dhaarani Devi", "Target SP": None, "Senior Dev": "No"},
+        {"Name": "Gangadhara S M", "Target SP": 20, "Senior Dev": "Yes"},
+        {"Name": "Harish Ramakrishna", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "Krishna S", "Target SP": None, "Senior Dev": "No"},
+        {"Name": "Md Nisar Ahmed", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "Nikitha R", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "Niveditha Ramachandra", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "Rakshith", "Target SP": 20, "Senior Dev": "Yes"},
+        {"Name": "Rangaswamy H", "Target SP": 20, "Senior Dev": "Yes"},
+        {"Name": "Sagar H", "Target SP": 16, "Senior Dev": "Yes"},
+        {"Name": "Saranya R", "Target SP": None, "Senior Dev": "No"},
+        {"Name": "Shuba A", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "Sudheendra K", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "Urla Dileep Kumar", "Target SP": 15, "Senior Dev": "No"},
+        {"Name": "vignesh k", "Target SP": 20, "Senior Dev": "Yes"},
+        {"Name": "Vignesh Sekaran", "Target SP": 16, "Senior Dev": "Yes"},
+        {"Name": "yogita.kotwal", "Target SP": 20, "Senior Dev": "Yes"},
+    ]
+
+    def fetch_issues(jql, fields, label):
+        url = f"{JIRA_URL}/rest/api/3/search"
+        headers = {"Accept": "application/json"}
+        params = {"jql": jql, "maxResults": 1000, "fields": ",".join(fields)}
+        response = requests.get(url, headers=headers, params=params, auth=HTTPBasicAuth(EMAIL, API_TOKEN))
+        if response.status_code == 200:
+            return response.json()["issues"]
         else:
-            df_filtered = df.copy()
+            st.error(f"❌ ERROR for {label}: {response.status_code} - {response.text}")
+            return []
 
-        # ---------- Compute Summary ----------
-        def compute_summary(df):
-            daily_logins = df.groupby("date").size().reset_index(name="Login Count")
-            daily_logins["Month"] = selected_month if selected_month != "All" else "Multiple"
-            return daily_logins
+    # === Build & display JQLs ===
+    sprint_jql = f"sprint in ({SPRINT_ID}) AND issuetype = Story"
+    bugfix_jql = (
+        f"project = QA AND status in (Closed, QA, 'PR Raised', 'IN LOCAL') "
+        f"AND updated >= {bugfix_start} AND updated <= {bugfix_end} AND issuetype = Bug"
+    )
+    regression_jql = (
+        f"project = QA AND status in (Closed, QA, 'PR Raised', 'IN LOCAL') "
+        f"AND updated >= {regression_start} AND updated <= {regression_end} AND issuetype = Regression"
+    )
+    dev_jql = (
+        f"project = 'Development Activities' AND updated >= {dev_start} AND updated <= {dev_end}"
+    )
+    ps_jql = (
+        f"project = 'KPISOFT Prod Support' AND status in ('QA Passed', Closed) "
+        f"AND updated >= {ps_start} AND updated <= {ps_end}"
+    )
 
-        def compute_metrics(df):
-            if df.empty:
-                return {}
+    # === Show JQLs in app ===
+    st.subheader("🔍 JQLs Used")
+    st.code(f"User Story JQL:\n{sprint_jql}")
+    st.code(f"Bug Fix Effort (Bug) JQL:\n{bugfix_jql}")
+    st.code(f"Regression JQL:\n{regression_jql}")
+    st.code(f"DEV Ticket Effort JQL:\n{dev_jql}")
+    st.code(f"PS Effort JQL:\n{ps_jql}")
 
-            registered_users = df["user_email"].nunique()
+    # === Run Queries ===
+    sprint_issues = fetch_issues(sprint_jql, ["assignee", "timespent"], "User Stories")
+    us_rows = []
+    for issue in sprint_issues:
+        assignee = issue["fields"]["assignee"]["displayName"] if issue["fields"]["assignee"] else None
+        timespent = issue["fields"]["timespent"] or 0
+        us_rows.append({"Name": assignee, "US_timespent": timespent})
+    us_df = pd.DataFrame(us_rows)
+    if not us_df.empty:
+        us_df = us_df.groupby("Name").agg({"US_timespent": "sum", "Name": "count"}).rename(columns={"Name": "User Story Count"}).reset_index()
+        us_df["User Story Effort"] = us_df["US_timespent"] / 60 / 60 / 8
+        us_df = us_df.drop(columns=["US_timespent"])
+    else:
+        us_df = pd.DataFrame(columns=["Name", "User Story Effort", "User Story Count"])
 
-            # DAU: average daily unique logins
-            dau_series = df.groupby("date")["user_email"].nunique()
-            dau_avg = dau_series.mean()
+    def extract_effort(issues, effort_col, count_col):
+        rows = []
+        for issue in issues:
+            assignee = issue["fields"]["assignee"]["displayName"] if issue["fields"]["assignee"] else None
+            timespent = issue["fields"]["timespent"] or 0
+            rows.append({"Name": assignee, f"{effort_col}_sec": timespent})
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return pd.DataFrame(columns=["Name", effort_col, count_col])
+        df_effort = df.groupby("Name").agg({f"{effort_col}_sec": "sum", "Name": "count"}).rename(columns={"Name": count_col}).reset_index()
+        df_effort[effort_col] = df_effort[f"{effort_col}_sec"] / 60 / 60 / 8
+        df_effort = df_effort.drop(columns=[f"{effort_col}_sec"])
+        return df_effort
 
-            # MAU: monthly unique users
-            mau = registered_users
+    bug_df = extract_effort(fetch_issues(bugfix_jql, ["assignee", "timespent"], "QA Fix Effort (Bug)"), "QA Fix Effort (Bug)", "Bug Count")
 
-            # Login behavior
-            login_counts = df["user_email"].value_counts()
-            repeat_login_pct = login_counts[login_counts > 1].count() / registered_users * 100 if registered_users else 0
-            unique_login_pct = login_counts[login_counts == 1].count() / registered_users * 100 if registered_users else 0
+    reg_df = extract_effort(fetch_issues(regression_jql, ["assignee", "timespent"], "QA Fix Effort (Reg)"), "QA Fix Effort (Reg)", "Regression Count")
 
-            dau_mau_ratio = (dau_avg / mau) * 100 if mau > 0 else 0
+    dev_df = extract_effort(fetch_issues(dev_jql, ["assignee", "timespent"], "Dev ticket Effort"), "Dev ticket Effort", "DEV Count")
 
-            month_name = df["month"].mode()[0] if not df["month"].mode().empty else "N/A"
+    ps_df = extract_effort(fetch_issues(ps_jql, ["assignee", "timespent"], "PS Effort"), "PS Effort", "PS Count")
 
-            return {
-                "Month": month_name,
-                "Registered": registered_users,
-                "DAU(Avg)": round(dau_avg, 2),
-                "MAU": mau,
-                "Repeat Logins": f"{repeat_login_pct:.0f}%",
-                "Unique Logins": f"{unique_login_pct:.0f}%",
-                "DAU/MAU(%)": f"{dau_mau_ratio:.0f}%"
-            }
+    df = pd.DataFrame(resource_static)
+    df = df.merge(us_df, on="Name", how="left")
+    df = df.merge(bug_df, on="Name", how="left")
+    df = df.merge(reg_df, on="Name", how="left")
+    df = df.merge(dev_df, on="Name", how="left")
+    df = df.merge(ps_df, on="Name", how="left")
 
-        # ---------- Results ----------
-        summary_df = compute_summary(df_filtered)
-        metrics = compute_metrics(df_filtered)
+    df = df.fillna(0).infer_objects(copy=False)
 
-        # ⏱️ Daily login summary with drill-down
-        st.subheader("📅 Daily Login Summary")
+    df["Dev Effort (US+QAB+QAR+Dev)"] = df["User Story Effort"] + df["QA Fix Effort (Bug)"] + df["QA Fix Effort (Reg)"] + df["Dev ticket Effort"]
+    df["Overall Effort"] = df["Dev Effort (US+QAB+QAR+Dev)"] + df["PS Effort"]
+    df["Productivity (US+QAR+Dev+PS)"] = df["Overall Effort"]
+    df["Delta"] = df["Productivity (US+QAR+Dev+PS)"]
 
-        st.write("Select a date to see the list of users who logged in:")
+    final_cols = [
+        "Name", "Target SP", "Senior Dev",
+        "User Story Effort", "QA Fix Effort (Bug)", "QA Fix Effort (Reg)", "Dev ticket Effort",
+        "Dev Effort (US+QAB+QAR+Dev)", "PS Effort", "Overall Effort", "Productivity (US+QAR+Dev+PS)", "Delta",
+        "User Story Count", "Bug Count", "Regression Count", "DEV Count", "PS Count"
+    ]
 
-        dates = summary_df["date"].astype(str).tolist()
-        selected_date = st.selectbox("Select Date", options=["None"] + dates)
-
-        st.dataframe(summary_df)
-
-        if selected_date != "None":
-            selected_date_obj = pd.to_datetime(selected_date).date()
-            users_on_date = df_filtered[df_filtered["date"] == selected_date_obj][["user_email", "@timestamp"]].sort_values("@timestamp")
-            st.subheader(f"👥 Users logged in on {selected_date}")
-            st.dataframe(users_on_date.reset_index(drop=True))
-
-        # 📊 Login Metrics
-        st.subheader("📊 Login and Activation Metrics")
-        if metrics:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("🗓️ Month", metrics["Month"])
-                st.metric("👤 Registered", metrics["Registered"])
-            with col2:
-                st.metric("📆 DAU (Avg)", metrics["DAU(Avg)"])
-                st.metric("📅 MAU", metrics["MAU"])
-            with col3:
-                st.metric("🔁 Repeat Logins", metrics["Repeat Logins"])
-                st.metric("✅ Unique Logins", metrics["Unique Logins"])
-                st.metric("📊 DAU/MAU (%)", metrics["DAU/MAU(%)"])
-
-            # Optional: Raw metrics for selected month
-            with st.expander("🔍 Show Raw Metrics Table"):
-                st.dataframe(pd.DataFrame([metrics]))
-
-        # 📋 All Months Metrics Summary
-        st.subheader("📋 Monthly Metrics Overview")
-
-        # Compute metrics for each month and collect
-        monthly_metrics = []
-        for month in sorted(df["month"].unique(), key=lambda m: datetime.strptime(m, "%B").month):
-            df_month = df[df["month"] == month]
-            month_metrics = compute_metrics(df_month)
-            monthly_metrics.append(month_metrics)
-
-        metrics_df = pd.DataFrame(monthly_metrics)
-
-        with st.expander("🔍 Show Raw Metrics Table for All Months"):
-            st.dataframe(metrics_df)
-
-            # CSV download
-            csv = metrics_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📥 Download Metrics as CSV",
-                data=csv,
-                file_name="monthly_login_metrics.csv",
-                mime="text/csv"
-            )
-
-    except Exception as e:
-        st.error(f"❌ Error while processing: {e}")
-
-else:
-    st.info("Please upload your login CSV file to begin.")
+    st.success("✅ Final Sprint Effort Breakdown")
+    st.dataframe(df[final_cols])
+    st.download_button("📥 Download Final Breakdown", df[final_cols].to_csv(index=False), "final_sprint_effort.csv")
