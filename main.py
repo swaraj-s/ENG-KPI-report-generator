@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from requests.auth import HTTPBasicAuth
 from datetime import date, timedelta
+import plotly.express as px
 
 # === Streamlit page ===
 st.set_page_config(page_title="📊 Jira Sprint Effort Dashboard", layout="wide")
@@ -67,33 +68,27 @@ if st.sidebar.button("🚀 Run Effort Breakdown"):
             st.error(f"❌ ERROR for {label}: {response.status_code} - {response.text}")
             return []
 
-    # === Build & display JQLs ===
     sprint_jql = f"sprint in ({SPRINT_ID}) AND issuetype = Story"
     bugfix_jql = (
         f"project = QA AND status in (Closed, QA, 'PR Raised', 'IN LOCAL') "
-        f"AND updated >= {bugfix_start} AND updated <= {bugfix_end} AND issuetype = Bug"
+        f"AND updated >= {bugfix_start} AND updated <= {bugfix_end} AND issuetype = Bug "
+        f"order by assignee"
     )
     regression_jql = (
         f"project = QA AND status in (Closed, QA, 'PR Raised', 'IN LOCAL') "
-        f"AND updated >= {regression_start} AND updated <= {regression_end} AND issuetype = Regression"
+        f"AND updated >= {regression_start} AND updated <= {regression_end} AND issuetype = Regression "
+        f"order by assignee"
     )
     dev_jql = (
-        f"project = 'Development Activities' AND updated >= {dev_start} AND updated <= {dev_end}"
+        f"project = 'Development Activities' AND updated >= {dev_start} AND updated <= {dev_end} "
+        f"order by assignee"
     )
     ps_jql = (
-        f"project = 'KPISOFT Prod Support' AND status in ('QA Passed', Closed) "
-        f"AND updated >= {ps_start} AND updated <= {ps_end}"
+        f"project = 'KPISOFT Prod Support' AND status in ('QA Passed', 'Closed') "
+        f"AND updated >= {ps_start} AND updated <= {ps_end} "
+        f"order by assignee"
     )
 
-    # === Show JQLs in app ===
-    st.subheader("🔍 JQLs Used")
-    st.code(f"User Story JQL:\n{sprint_jql}")
-    st.code(f"Bug Fix Effort (Bug) JQL:\n{bugfix_jql}")
-    st.code(f"Regression JQL:\n{regression_jql}")
-    st.code(f"DEV Ticket Effort JQL:\n{dev_jql}")
-    st.code(f"PS Effort JQL:\n{ps_jql}")
-
-    # === Run Queries ===
     sprint_issues = fetch_issues(sprint_jql, ["assignee", "timespent"], "User Stories")
     us_rows = []
     for issue in sprint_issues:
@@ -123,11 +118,8 @@ if st.sidebar.button("🚀 Run Effort Breakdown"):
         return df_effort
 
     bug_df = extract_effort(fetch_issues(bugfix_jql, ["assignee", "timespent"], "QA Fix Effort (Bug)"), "QA Fix Effort (Bug)", "Bug Count")
-
     reg_df = extract_effort(fetch_issues(regression_jql, ["assignee", "timespent"], "QA Fix Effort (Reg)"), "QA Fix Effort (Reg)", "Regression Count")
-
     dev_df = extract_effort(fetch_issues(dev_jql, ["assignee", "timespent"], "Dev ticket Effort"), "Dev ticket Effort", "DEV Count")
-
     ps_df = extract_effort(fetch_issues(ps_jql, ["assignee", "timespent"], "PS Effort"), "PS Effort", "PS Count")
 
     df = pd.DataFrame(resource_static)
@@ -142,15 +134,63 @@ if st.sidebar.button("🚀 Run Effort Breakdown"):
     df["Dev Effort (US+QAB+QAR+Dev)"] = df["User Story Effort"] + df["QA Fix Effort (Bug)"] + df["QA Fix Effort (Reg)"] + df["Dev ticket Effort"]
     df["Overall Effort"] = df["Dev Effort (US+QAB+QAR+Dev)"] + df["PS Effort"]
     df["Productivity (US+QAR+Dev+PS)"] = df["Overall Effort"]
-    df["Delta"] = df["Productivity (US+QAR+Dev+PS)"]
 
-    final_cols = [
-        "Name", "Target SP", "Senior Dev",
-        "User Story Effort", "QA Fix Effort (Bug)", "QA Fix Effort (Reg)", "Dev ticket Effort",
-        "Dev Effort (US+QAB+QAR+Dev)", "PS Effort", "Overall Effort", "Productivity (US+QAR+Dev+PS)", "Delta",
-        "User Story Count", "Bug Count", "Regression Count", "DEV Count", "PS Count"
-    ]
+    st.dataframe(df)
 
-    st.success("✅ Final Sprint Effort Breakdown")
-    st.dataframe(df[final_cols])
-    st.download_button("📥 Download Final Breakdown", df[final_cols].to_csv(index=False), "final_sprint_effort.csv")
+    # 1️⃣ Overall Effort by Person
+    fig1 = px.bar(df, x="Name", y="Overall Effort", title="1️⃣ Overall Effort by Person")
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # 2️⃣ Productivity by Person
+    fig2 = px.bar(df, x="Name", y="Productivity (US+QAR+Dev+PS)", title="2️⃣ Productivity by Person")
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # 3️⃣ Stacked Effort Breakdown per Person
+    melted = df.melt(id_vars=["Name"], value_vars=[
+        "User Story Effort", "QA Fix Effort (Bug)", "QA Fix Effort (Reg)",
+        "Dev ticket Effort", "PS Effort"
+    ], var_name="Effort Type", value_name="Effort")
+    fig3 = px.bar(melted, x="Name", y="Effort", color="Effort Type",
+                  title="3️⃣ Stacked Effort Breakdown per Person")
+    st.plotly_chart(fig3, use_container_width=True)
+
+    # 4️⃣ Target SP vs Actual Dev Effort
+    fig4 = px.bar(df[df["Target SP"] > 0], x="Name", y=["Target SP", "Dev Effort (US+QAB+QAR+Dev)"],
+                  barmode="group", title="4️⃣ Target SP vs Actual Dev Effort")
+    st.plotly_chart(fig4, use_container_width=True)
+
+    # 5️⃣ User Story Effort vs QA Fix Effort (Bug)
+    fig5 = px.scatter(df, x="User Story Effort", y="QA Fix Effort (Bug)", text="Name",
+                      title="5️⃣ User Story Effort vs QA Fix Effort (Bug)")
+    st.plotly_chart(fig5, use_container_width=True)
+
+    # 6️⃣ Effort Distribution (Team-Level)
+    total_efforts = df[["User Story Effort", "QA Fix Effort (Bug)", "QA Fix Effort (Reg)",
+                        "Dev ticket Effort", "PS Effort"]].sum().reset_index()
+    total_efforts.columns = ["Effort Type", "Total Effort"]
+    fig6 = px.pie(total_efforts, names="Effort Type", values="Total Effort",
+                  title="6️⃣ Effort Distribution (Team-Level)")
+    st.plotly_chart(fig6, use_container_width=True)
+
+    # 7️⃣ Senior vs Non-Senior Effort & Productivity
+    senior_summary = df.groupby("Senior Dev").agg({
+        "Overall Effort": "mean",
+        "Productivity (US+QAR+Dev+PS)": "mean"
+    }).reset_index()
+    senior_melted = senior_summary.melt(id_vars=["Senior Dev"], var_name="Metric", value_name="Value")
+    fig7 = px.bar(senior_melted, x="Senior Dev", y="Value", color="Metric",
+                  barmode="group", title="7️⃣ Senior vs Non-Senior Effort & Productivity")
+    st.plotly_chart(fig7, use_container_width=True)
+
+    # 8️⃣ Productivity vs Overall Effort
+    fig8 = px.scatter(df, x="Overall Effort", y="Productivity (US+QAR+Dev+PS)", text="Name",
+                      title="8️⃣ Productivity vs Overall Effort")
+    st.plotly_chart(fig8, use_container_width=True)
+
+    # 9️⃣ Dev Ticket Effort by Person
+    fig9 = px.bar(df, x="Name", y="Dev ticket Effort", title="9️⃣ Dev Ticket Effort by Person")
+    st.plotly_chart(fig9, use_container_width=True)
+
+    # 🔟 PS Effort by Person
+    fig10 = px.bar(df, x="Name", y="PS Effort", title="🔟 PS Effort by Person")
+    st.plotly_chart(fig10, use_container_width=True)
