@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 import requests
 from requests.auth import HTTPBasicAuth
-from datetime import date, timedelta
-import plotly.express as px
+from datetime import datetime
 
 # === Streamlit page ===
-st.set_page_config(page_title="📊 Jira Sprint Effort Dashboard", layout="wide")
-st.title("📊 Jira Sprint Effort Breakdown")
+st.set_page_config(page_title="📊 Jira Effort Breakdown", layout="wide")
+st.title("📊 Jira Effort Breakdown (Multiple JQL, Real-time)")
 
 # === Inputs ===
 st.sidebar.header("🔑 Jira API Config")
@@ -15,182 +14,233 @@ JIRA_URL = st.sidebar.text_input("Jira URL", "https://kpisoft.atlassian.net/")
 EMAIL = st.sidebar.text_input("Email", "swaraj.s@entomo.co")
 API_TOKEN = st.sidebar.text_input("API Token", type="password")
 
-today = date.today()
-one_month_ago = today - timedelta(days=30)
+default_start_date = datetime.strptime("2025-05-05", "%Y-%m-%d").date()
+default_end_date = datetime.strptime("2025-06-01", "%Y-%m-%d").date()
 
+# === Improved UI ===
 st.sidebar.header("📅 Sprint & Date Ranges")
 SPRINT_ID = st.sidebar.text_input("Sprint ID", "722")
 
-bugfix_start = st.sidebar.date_input("Bug Fixing Start Date", one_month_ago)
-bugfix_end = st.sidebar.date_input("Bug Fixing End Date", today)
-regression_start = st.sidebar.date_input("Regression Start Date", one_month_ago)
-regression_end = st.sidebar.date_input("Regression End Date", today)
-dev_start = st.sidebar.date_input("DEV Start Date", one_month_ago)
-dev_end = st.sidebar.date_input("DEV End Date", today)
-ps_start = st.sidebar.date_input("PS Start Date", one_month_ago)
-ps_end = st.sidebar.date_input("PS End Date", today)
+qa_start = st.sidebar.date_input("QA Start Date", default_start_date)
+qa_end = st.sidebar.date_input("QA End Date", default_end_date)
+
+dev_start = st.sidebar.date_input("DEV Start Date", default_start_date)
+dev_end = st.sidebar.date_input("DEV End Date", default_end_date)
+
+ps_start = st.sidebar.date_input("PS Start Date", default_start_date)
+ps_end = st.sidebar.date_input("PS End Date", default_end_date)
 
 if st.sidebar.button("🚀 Run Effort Breakdown"):
 
-    resource_static = [
-        {"Name": "Abhishek Patro", "Target SP": None, "Senior Dev": "No"},
-        {"Name": "Amit Krishna", "Target SP": 20, "Senior Dev": "Yes"},
-        {"Name": "Avinash S", "Target SP": 20, "Senior Dev": "Yes"},
-        {"Name": "Chaithra B", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "chandan k", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "Dhaarani Devi", "Target SP": None, "Senior Dev": "No"},
-        {"Name": "Gangadhara S M", "Target SP": 20, "Senior Dev": "Yes"},
-        {"Name": "Harish Ramakrishna", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "Krishna S", "Target SP": None, "Senior Dev": "No"},
-        {"Name": "Md Nisar Ahmed", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "Nikitha R", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "Niveditha Ramachandra", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "Rakshith", "Target SP": 20, "Senior Dev": "Yes"},
-        {"Name": "Rangaswamy H", "Target SP": 20, "Senior Dev": "Yes"},
-        {"Name": "Sagar H", "Target SP": 16, "Senior Dev": "Yes"},
-        {"Name": "Saranya R", "Target SP": None, "Senior Dev": "No"},
-        {"Name": "Shuba A", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "Sudheendra K", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "Urla Dileep Kumar", "Target SP": 15, "Senior Dev": "No"},
-        {"Name": "vignesh k", "Target SP": 20, "Senior Dev": "Yes"},
-        {"Name": "Vignesh Sekaran", "Target SP": 16, "Senior Dev": "Yes"},
-        {"Name": "yogita.kotwal", "Target SP": 20, "Senior Dev": "Yes"},
-    ]
+    # === JQLs ===
+    QA_JQL = f"""
+        project = QA AND status in (Closed, QA, "PR Raised", "IN LOCAL")
+        AND updated >= {qa_start} AND updated <= {qa_end}
+        ORDER BY assignee
+    """.replace("\n", " ").strip()
 
-    def fetch_issues(jql, fields, label):
+    US_JQL = f"""
+        sprint in ({SPRINT_ID}) AND issuetype = Story
+    """.replace("\n", " ").strip()
+
+    DEV_JQL = f"""
+        project = "Development Activities" AND updated >= {dev_start} AND updated <= {dev_end}
+        ORDER BY assignee
+    """.replace("\n", " ").strip()
+
+    PS_JQL = f"""
+        project = "KPISOFT Prod Support" AND status in ("QA Passed", Closed)
+        AND updated >= {ps_start} AND updated <= {ps_end}
+        ORDER BY assignee
+    """.replace("\n", " ").strip()
+
+    st.write("📌 QA JQL:", QA_JQL)
+    st.write("📌 US JQL:", US_JQL)
+    st.write("📌 DEV JQL:", DEV_JQL)
+    st.write("📌 PS JQL:", PS_JQL)
+
+    def fetch_issues(jql):
         url = f"{JIRA_URL}/rest/api/3/search"
         headers = {"Accept": "application/json"}
-        params = {"jql": jql, "maxResults": 1000, "fields": ",".join(fields)}
-        response = requests.get(url, headers=headers, params=params, auth=HTTPBasicAuth(EMAIL, API_TOKEN))
-        if response.status_code == 200:
-            return response.json()["issues"]
-        else:
-            st.error(f"❌ ERROR for {label}: {response.status_code} - {response.text}")
-            return []
+        start_at = 0
+        max_results = 100
+        all_issues = []
 
-    sprint_jql = f"sprint in ({SPRINT_ID}) AND issuetype = Story"
-    bugfix_jql = (
-        f"project = QA AND status in (Closed, QA, 'PR Raised', 'IN LOCAL') "
-        f"AND updated >= {bugfix_start} AND updated <= {bugfix_end} AND issuetype = Bug "
-        f"order by assignee"
-    )
-    regression_jql = (
-        f"project = QA AND status in (Closed, QA, 'PR Raised', 'IN LOCAL') "
-        f"AND updated >= {regression_start} AND updated <= {regression_end} AND issuetype = Regression "
-        f"order by assignee"
-    )
-    dev_jql = (
-        f"project = 'Development Activities' AND updated >= {dev_start} AND updated <= {dev_end} "
-        f"order by assignee"
-    )
-    ps_jql = (
-        f"project = 'KPISOFT Prod Support' AND status in ('QA Passed', 'Closed') "
-        f"AND updated >= {ps_start} AND updated <= {ps_end} "
-        f"order by assignee"
-    )
+        while True:
+            params = {
+                "jql": jql,
+                "startAt": start_at,
+                "maxResults": max_results,
+                "fields": "assignee,issuetype,timespent"
+            }
+            response = requests.get(url, headers=headers, params=params, auth=HTTPBasicAuth(EMAIL, API_TOKEN))
+            if response.status_code != 200:
+                st.error(f"❌ API Error: {response.status_code} - {response.text}")
+                return []
 
-    sprint_issues = fetch_issues(sprint_jql, ["assignee", "timespent"], "User Stories")
+            data = response.json()
+            issues = data.get("issues", [])
+            all_issues.extend(issues)
+
+            if len(issues) < max_results:
+                break
+
+            start_at += max_results
+
+        return all_issues
+
+    # === Fetch ===
+    qa_issues = fetch_issues(QA_JQL)
+    us_issues = fetch_issues(US_JQL)
+    dev_issues = fetch_issues(DEV_JQL)
+    ps_issues = fetch_issues(PS_JQL)
+
+    st.write(f"✅ QA Issues: {len(qa_issues)}")
+    st.write(f"✅ US Issues: {len(us_issues)}")
+    st.write(f"✅ DEV Issues: {len(dev_issues)}")
+    st.write(f"✅ PS Issues: {len(ps_issues)}")
+
+    # === QA Effort: Bug & Reg ===
+    qa_rows = []
+    for issue in qa_issues:
+        f = issue["fields"]
+        assignee = f["assignee"]["displayName"] if f["assignee"] else "Unassigned"
+        issuetype = f["issuetype"]["name"]
+        timespent = f.get("timespent") or 0
+        qa_rows.append({
+            "Assignee": assignee.strip(),
+            "IssueType": issuetype,
+            "Timespent_sec": timespent
+        })
+    qa_df = pd.DataFrame(qa_rows)
+    if not qa_df.empty:
+        qa_df["Timespent_days"] = qa_df["Timespent_sec"] / 60 / 60 / 8
+    else:
+        qa_df = pd.DataFrame(columns=["Assignee", "IssueType", "Timespent_sec", "Timespent_days"])
+
+    bug_df = qa_df[qa_df["IssueType"].str.lower() == "bug"].groupby("Assignee").agg(
+        Bug_Count=("IssueType", "count"),
+        Bug_Effort=("Timespent_days", "sum")
+    ).reset_index()
+
+    reg_df = qa_df[qa_df["IssueType"].str.lower() == "regression"].groupby("Assignee").agg(
+        Reg_Count=("IssueType", "count"),
+        Reg_Effort=("Timespent_days", "sum")
+    ).reset_index()
+
+    # === User Story Effort ===
     us_rows = []
-    for issue in sprint_issues:
-        assignee = issue["fields"]["assignee"]["displayName"] if issue["fields"]["assignee"] else None
-        timespent = issue["fields"]["timespent"] or 0
-        us_rows.append({"Name": assignee, "US_timespent": timespent})
+    for issue in us_issues:
+        f = issue["fields"]
+        assignee = f["assignee"]["displayName"] if f["assignee"] else "Unassigned"
+        timespent = f.get("timespent") or 0
+        us_rows.append({
+            "Assignee": assignee.strip(),
+            "Timespent_sec": timespent
+        })
     us_df = pd.DataFrame(us_rows)
     if not us_df.empty:
-        us_df = us_df.groupby("Name").agg({"US_timespent": "sum", "Name": "count"}).rename(columns={"Name": "User Story Count"}).reset_index()
-        us_df["User Story Effort"] = us_df["US_timespent"] / 60 / 60 / 8
-        us_df = us_df.drop(columns=["US_timespent"])
+        us_df["Timespent_days"] = us_df["Timespent_sec"] / 60 / 60 / 8
+        us_df = us_df.groupby("Assignee").agg(
+            US_Count=("Timespent_sec", "count"),
+            US_Effort=("Timespent_days", "sum")
+        ).reset_index()
     else:
-        us_df = pd.DataFrame(columns=["Name", "User Story Effort", "User Story Count"])
+        us_df = pd.DataFrame(columns=["Assignee", "US_Count", "US_Effort"])
 
-    def extract_effort(issues, effort_col, count_col):
-        rows = []
-        for issue in issues:
-            assignee = issue["fields"]["assignee"]["displayName"] if issue["fields"]["assignee"] else None
-            timespent = issue["fields"]["timespent"] or 0
-            rows.append({"Name": assignee, f"{effort_col}_sec": timespent})
-        df = pd.DataFrame(rows)
-        if df.empty:
-            return pd.DataFrame(columns=["Name", effort_col, count_col])
-        df_effort = df.groupby("Name").agg({f"{effort_col}_sec": "sum", "Name": "count"}).rename(columns={"Name": count_col}).reset_index()
-        df_effort[effort_col] = df_effort[f"{effort_col}_sec"] / 60 / 60 / 8
-        df_effort = df_effort.drop(columns=[f"{effort_col}_sec"])
-        return df_effort
+    # === DEV Effort ===
+    dev_rows = []
+    for issue in dev_issues:
+        f = issue["fields"]
+        assignee = f["assignee"]["displayName"] if f["assignee"] else "Unassigned"
+        timespent = f.get("timespent") or 0
+        dev_rows.append({
+            "Assignee": assignee.strip(),
+            "Timespent_sec": timespent
+        })
+    dev_df = pd.DataFrame(dev_rows)
+    if not dev_df.empty:
+        dev_df["Timespent_days"] = dev_df["Timespent_sec"] / 60 / 60 / 8
+        dev_df = dev_df.groupby("Assignee").agg(
+            DEV_Count=("Timespent_sec", "count"),
+            DEV_Effort=("Timespent_days", "sum")
+        ).reset_index()
+    else:
+        dev_df = pd.DataFrame(columns=["Assignee", "DEV_Count", "DEV_Effort"])
 
-    bug_df = extract_effort(fetch_issues(bugfix_jql, ["assignee", "timespent"], "QA Fix Effort (Bug)"), "QA Fix Effort (Bug)", "Bug Count")
-    reg_df = extract_effort(fetch_issues(regression_jql, ["assignee", "timespent"], "QA Fix Effort (Reg)"), "QA Fix Effort (Reg)", "Regression Count")
-    dev_df = extract_effort(fetch_issues(dev_jql, ["assignee", "timespent"], "Dev ticket Effort"), "Dev ticket Effort", "DEV Count")
-    ps_df = extract_effort(fetch_issues(ps_jql, ["assignee", "timespent"], "PS Effort"), "PS Effort", "PS Count")
+    # === PS Effort ===
+    ps_rows = []
+    for issue in ps_issues:
+        f = issue["fields"]
+        assignee = f["assignee"]["displayName"] if f["assignee"] else "Unassigned"
+        timespent = f.get("timespent") or 0
+        ps_rows.append({
+            "Assignee": assignee.strip(),
+            "Timespent_sec": timespent
+        })
+    ps_df = pd.DataFrame(ps_rows)
+    if not ps_df.empty:
+        ps_df["Timespent_days"] = ps_df["Timespent_sec"] / 60 / 60 / 8
+        ps_df = ps_df.groupby("Assignee").agg(
+            PS_Count=("Timespent_sec", "count"),
+            PS_Effort=("Timespent_days", "sum")
+        ).reset_index()
+    else:
+        ps_df = pd.DataFrame(columns=["Assignee", "PS_Count", "PS_Effort"])
 
-    df = pd.DataFrame(resource_static)
-    df = df.merge(us_df, on="Name", how="left")
-    df = df.merge(bug_df, on="Name", how="left")
-    df = df.merge(reg_df, on="Name", how="left")
-    df = df.merge(dev_df, on="Name", how="left")
-    df = df.merge(ps_df, on="Name", how="left")
+    # === Final Merge & Format ===
+    final_df = bug_df.merge(reg_df, on="Assignee", how="outer") \
+                     .merge(us_df, on="Assignee", how="outer") \
+                     .merge(dev_df, on="Assignee", how="outer") \
+                     .merge(ps_df, on="Assignee", how="outer") \
+                     .fillna(0)
 
-    df = df.fillna(0).infer_objects(copy=False)
+    final_df["Dev Effort (US+QAB+QAR+Dev)"] = (
+        final_df["Bug_Effort"] + final_df["Reg_Effort"] + final_df["US_Effort"] + final_df["DEV_Effort"]
+    )
 
-    df["Dev Effort (US+QAB+QAR+Dev)"] = df["User Story Effort"] + df["QA Fix Effort (Bug)"] + df["QA Fix Effort (Reg)"] + df["Dev ticket Effort"]
-    df["Overall Effort"] = df["Dev Effort (US+QAB+QAR+Dev)"] + df["PS Effort"]
-    df["Productivity (US+QAR+Dev+PS)"] = df["Overall Effort"]
+    final_df["Overall Effort"] = final_df["Dev Effort (US+QAB+QAR+Dev)"] + final_df["PS_Effort"]
 
-    st.dataframe(df)
+    final_df["Productivity (US+QAR+Dev+PS)?"] = (
+        final_df["US_Effort"] + final_df["Reg_Effort"] + final_df["DEV_Effort"] + final_df["PS_Effort"]
+    )
 
-    # 1️⃣ Overall Effort by Person
-    fig1 = px.bar(df, x="Name", y="Overall Effort", title="1️⃣ Overall Effort by Person")
-    st.plotly_chart(fig1, use_container_width=True)
+    final_df.rename(columns={
+        "Assignee": "Name?",
+        "US_Effort": "User Story Effort",
+        "Bug_Effort": "QA Fix Effort? (Bug)",
+        "Reg_Effort": "QA Fix Effort? (Reg)",
+        "DEV_Effort": "Dev ticket Effort",
+        "PS_Effort": "PS Effort",
+        "DEV_Count": "Dev Count",
+        "US_Count": "US Count",
+        "PS_Count": "PS Count"
+    }, inplace=True)
 
-    # 2️⃣ Productivity by Person
-    fig2 = px.bar(df, x="Name", y="Productivity (US+QAR+Dev+PS)", title="2️⃣ Productivity by Person")
-    st.plotly_chart(fig2, use_container_width=True)
+    final_df = final_df[
+        [
+            "Name?",
+            "User Story Effort",
+            "QA Fix Effort? (Bug)",
+            "QA Fix Effort? (Reg)",
+            "Dev ticket Effort",
+            "Dev Effort (US+QAB+QAR+Dev)",
+            "PS Effort",
+            "Overall Effort",
+            "Productivity (US+QAR+Dev+PS)?",
+            "Dev Count",
+            "US Count",
+            "PS Count"
+        ]
+    ]
 
-    # 3️⃣ Stacked Effort Breakdown per Person
-    melted = df.melt(id_vars=["Name"], value_vars=[
-        "User Story Effort", "QA Fix Effort (Bug)", "QA Fix Effort (Reg)",
-        "Dev ticket Effort", "PS Effort"
-    ], var_name="Effort Type", value_name="Effort")
-    fig3 = px.bar(melted, x="Name", y="Effort", color="Effort Type",
-                  title="3️⃣ Stacked Effort Breakdown per Person")
-    st.plotly_chart(fig3, use_container_width=True)
+    st.write("✅ Final Effort Breakdown (Formatted):")
+    st.dataframe(final_df)
 
-    # 4️⃣ Target SP vs Actual Dev Effort
-    fig4 = px.bar(df[df["Target SP"] > 0], x="Name", y=["Target SP", "Dev Effort (US+QAB+QAR+Dev)"],
-                  barmode="group", title="4️⃣ Target SP vs Actual Dev Effort")
-    st.plotly_chart(fig4, use_container_width=True)
-
-    # 5️⃣ User Story Effort vs QA Fix Effort (Bug)
-    fig5 = px.scatter(df, x="User Story Effort", y="QA Fix Effort (Bug)", text="Name",
-                      title="5️⃣ User Story Effort vs QA Fix Effort (Bug)")
-    st.plotly_chart(fig5, use_container_width=True)
-
-    # 6️⃣ Effort Distribution (Team-Level)
-    total_efforts = df[["User Story Effort", "QA Fix Effort (Bug)", "QA Fix Effort (Reg)",
-                        "Dev ticket Effort", "PS Effort"]].sum().reset_index()
-    total_efforts.columns = ["Effort Type", "Total Effort"]
-    fig6 = px.pie(total_efforts, names="Effort Type", values="Total Effort",
-                  title="6️⃣ Effort Distribution (Team-Level)")
-    st.plotly_chart(fig6, use_container_width=True)
-
-    # 7️⃣ Senior vs Non-Senior Effort & Productivity
-    senior_summary = df.groupby("Senior Dev").agg({
-        "Overall Effort": "mean",
-        "Productivity (US+QAR+Dev+PS)": "mean"
-    }).reset_index()
-    senior_melted = senior_summary.melt(id_vars=["Senior Dev"], var_name="Metric", value_name="Value")
-    fig7 = px.bar(senior_melted, x="Senior Dev", y="Value", color="Metric",
-                  barmode="group", title="7️⃣ Senior vs Non-Senior Effort & Productivity")
-    st.plotly_chart(fig7, use_container_width=True)
-
-    # 8️⃣ Productivity vs Overall Effort
-    fig8 = px.scatter(df, x="Overall Effort", y="Productivity (US+QAR+Dev+PS)", text="Name",
-                      title="8️⃣ Productivity vs Overall Effort")
-    st.plotly_chart(fig8, use_container_width=True)
-
-    # 9️⃣ Dev Ticket Effort by Person
-    fig9 = px.bar(df, x="Name", y="Dev ticket Effort", title="9️⃣ Dev Ticket Effort by Person")
-    st.plotly_chart(fig9, use_container_width=True)
-
-    # 🔟 PS Effort by Person
-    fig10 = px.bar(df, x="Name", y="PS Effort", title="🔟 PS Effort by Person")
-    st.plotly_chart(fig10, use_container_width=True)
+    csv = final_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "📥 Download CSV",
+        data=csv,
+        file_name="jira_effort_breakdown.csv",
+        mime="text/csv"
+    )
