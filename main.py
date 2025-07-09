@@ -6,7 +6,7 @@ from datetime import datetime
 
 # === Streamlit page ===
 st.set_page_config(page_title="📊 Jira Effort Breakdown", layout="wide")
-st.title("📊 Jira Effort Breakdown (Multiple JQL, Real-time)")
+st.title("📊 Jira Effort Breakdown")
 
 # === Sidebar inputs ===
 st.sidebar.header("🔑 Jira API Config")
